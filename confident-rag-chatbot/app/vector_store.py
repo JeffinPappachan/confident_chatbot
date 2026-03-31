@@ -54,3 +54,16 @@ class FAISSVectorStore:
             raise ValueError("Vector store is not loaded.")
 
         return self.index.similarity_search(query, k=k)
+
+    def similarity_search_by_vector(self, embedding: List[float], k: int = 4) -> List[Document]:
+        if self.index is None:
+            raise ValueError("Vector store is not loaded.")
+
+        return self.index.similarity_search_by_vector(embedding, k=k)
+
+    def get_all_documents(self) -> List[Document]:
+        if self.index is None:
+            raise ValueError("Vector store is not loaded.")
+
+        docstore_dict = getattr(self.index.docstore, "_dict", {})
+        return [document for document in docstore_dict.values() if isinstance(document, Document)]

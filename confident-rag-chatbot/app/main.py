@@ -8,7 +8,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import EMBEDDING_MODEL
-from app.rag_pipeline import RAGPipeline
+from app.rag_pipeline import RAGPipeline, RAGResponse
+from app.reranker import _get_reranker_model
 
 
 rag_pipeline: RAGPipeline | None = None
@@ -18,8 +19,14 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, description="User question for the chatbot")
 
 
+class SourceItem(BaseModel):
+    document: str
+    page: int | str
+
+
 class ChatResponse(BaseModel):
-    response: str
+    answer: str
+    sources: list[SourceItem]
 
 
 @asynccontextmanager
@@ -36,6 +43,16 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+def warmup_models() -> None:
+    try:
+        print("Starting model warmup...")
+        _get_reranker_model()
+        print("Model warmup completed.")
+    except Exception as exc:  # pragma: no cover - startup protection
+        print(f"Warmup failed: {exc}")
+
+
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
@@ -47,11 +64,13 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=503, detail="RAG pipeline is not initialized.")
 
     try:
-        response = rag_pipeline.ask(request.question)
-        return ChatResponse(response=response)
+        response: RAGResponse = rag_pipeline.ask(request.question)
+        return ChatResponse(answer=response.answer, sources=response.sources)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - runtime protection
         raise HTTPException(status_code=500, detail=f"Chat request failed: {exc}") from exc

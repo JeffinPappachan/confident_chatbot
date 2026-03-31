@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from hashlib import md5
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -35,6 +36,17 @@ def main() -> None:
 
     if not chunks:
         raise ValueError("No chunks were generated from the provided documents.")
+
+    for index, chunk in enumerate(chunks):
+        metadata = dict(chunk.metadata or {})
+        source = metadata.get("source", "unknown")
+        page = metadata.get("page", "unknown")
+        digest = md5(
+            f"{source}|{page}|{chunk.page_content}".encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()[:12]
+        metadata["chunk_id"] = metadata.get("chunk_id", f"{source}-{page}-{index}-{digest}")
+        chunk.metadata = metadata
 
     print("Generating embeddings and building FAISS index...")
     embeddings = SentenceTransformerEmbeddings(EMBEDDING_MODEL)

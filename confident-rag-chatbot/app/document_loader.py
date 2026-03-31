@@ -18,6 +18,30 @@ except ImportError as exc:  # pragma: no cover - import safety
     ) from exc
 
 
+def normalize_metadata(metadata: dict) -> dict:
+    """Normalize metadata shape across PDF and website documents."""
+
+    normalized = dict(metadata)
+    source_value = str(normalized.get("source", "unknown"))
+    if source_value.lower().endswith(".pdf"):
+        normalized["source"] = Path(source_value).name
+    else:
+        normalized["source"] = source_value
+
+    raw_page = normalized.get("page", 0)
+    try:
+        page_number = int(raw_page)
+        if normalized.get("type") == "pdf" and page_number >= 0:
+            page_number += 1
+        elif page_number <= 0:
+            page_number = 1
+    except (TypeError, ValueError):
+        page_number = 1
+
+    normalized["page"] = page_number
+    return normalized
+
+
 def load_pdf_documents(data_dir: Path) -> List[Document]:
     """Load all PDF files from the given directory."""
 
@@ -34,7 +58,17 @@ def load_pdf_documents(data_dir: Path) -> List[Document]:
 
     for pdf_file in pdf_files:
         loader = PyPDFLoader(str(pdf_file))
-        documents.extend(loader.load())
+        loaded_documents = loader.load()
+        for document in loaded_documents:
+            document.metadata = normalize_metadata(
+                {
+                    **(document.metadata or {}),
+                    "source": pdf_file.name,
+                    "page": (document.metadata or {}).get("page", 0),
+                    "type": "pdf",
+                }
+            )
+        documents.extend(loaded_documents)
 
     return documents
 
@@ -65,7 +99,9 @@ def load_website_documents(urls: Sequence[str], timeout: int = 20) -> List[Docum
         documents.append(
             Document(
                 page_content=text,
-                metadata={"source": cleaned_url, "type": "website"},
+                metadata=normalize_metadata(
+                    {"source": cleaned_url, "page": 1, "type": "website"}
+                ),
             )
         )
 

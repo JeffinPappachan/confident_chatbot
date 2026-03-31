@@ -1,8 +1,8 @@
 # Confident Group RAG Chatbot
 
-A polished Retrieval-Augmented Generation (RAG) chatbot for **Confident Group**, built with **FastAPI**, **LangChain**, **FAISS**, **sentence-transformers**, **Groq/OpenAI/Ollama**, and **Streamlit**.
+A Retrieval-Augmented Generation (RAG) chatbot for **Confident Group** built with **FastAPI**, **Streamlit**, **LangChain**, **FAISS**, **sentence-transformers**, and provider-backed LLM inference through **Groq**, **OpenAI-compatible APIs**, or **Ollama**.
 
-The system ingests company documents, builds a FAISS index, combines semantic and keyword retrieval, reranks results, protects the prompt context window, and returns grounded answers with source citations.
+The current system ingests PDF documents from `data/confident_docs`, optionally pulls text from websites, creates a FAISS index, combines vector search with BM25 keyword retrieval, reranks the retrieved chunks, guards the final prompt size, and returns grounded answers with structured source citations.
 
 ## Architecture
 
@@ -11,21 +11,33 @@ User
 -> Streamlit UI
 -> FastAPI API
 -> Query Rewriter
--> Embedding
 -> Hybrid Retrieval (FAISS + BM25)
--> Reranker
+-> Cross-Encoder Reranker
 -> Context Window Guard
 -> Prompt Builder
--> LLM
+-> LLM Provider
 -> Answer + Sources
 ```
+
+## What The System Does
+
+- `POST /chat` accepts a user question and returns an `answer` plus `sources`
+- `GET /health` exposes a simple health check
+- Loads PDFs from `data/confident_docs`
+- Optionally ingests website pages from `WEBSITE_URLS`
+- Uses `sentence-transformers/all-MiniLM-L6-v2` embeddings by default
+- Merges FAISS semantic search with BM25 keyword matches
+- Optionally rewrites vague follow-up queries before retrieval
+- Optionally reranks retrieved chunks with `cross-encoder/ms-marco-MiniLM-L-6-v2`
+- Prevents oversized prompts with a context-window guard
+- Logs query activity to `logs/query_logs.json`
+- Returns source metadata separately from the generated answer
 
 ## Project Structure
 
 ```text
 confident-rag-chatbot/
 |- app/
-|  |- __init__.py
 |  |- config.py
 |  |- document_loader.py
 |  |- embeddings.py
@@ -40,69 +52,53 @@ confident-rag-chatbot/
 |- data/
 |  |- confident_docs/
 |  `- faiss_index/
-|- logs/
 |- scripts/
 |  `- ingest_documents.py
 |- ui/
-|  |- __init__.py
 |  `- chat_ui.py
 |- requirements.txt
 |- README.md
 `- run.sh
 ```
 
-## Features
-
-- FastAPI backend with `POST /chat` and `GET /health`
-- Streamlit chat UI with preserved chat history
-- Query rewriting for vague follow-up questions
-- Hybrid retrieval using FAISS plus BM25
-- Lightweight reranking with startup warmup and lazy fallback
-- Context window guard to prevent prompt overflow
-- Structured source citations in API/UI responses
-- Query logging to `logs/query_logs.json`
-- PDF ingestion with chunk metadata for source filename and page number
-- Optional website ingestion support
-- Groq, OpenAI-compatible, and Ollama provider support
-
-## Prerequisites
+## Requirements
 
 - Python 3.11 recommended
 - `uv` installed
-- A configured LLM provider
+- At least one configured LLM provider:
+  - Groq
+  - OpenAI-compatible API
+  - Ollama
 
 ## Setup
 
-### 1. Create the virtual environment
+### 1. Create and activate a virtual environment
 
-```bash
-uv venv .venv
-```
-
-### 2. Activate it in PowerShell
+PowerShell:
 
 ```powershell
 cd confident-rag-chatbot
+uv venv .venv
 . .\.venv\Scripts\Activate.ps1
 ```
 
-You can also skip activation and run everything with `uv run`.
+You can also skip activation and use `uv run ...` for every command.
 
-### 3. Install dependencies
+### 2. Install dependencies
 
-```bash
+```powershell
 uv pip install -r requirements.txt
 ```
 
-### 4. Add documents
+### 3. Add source documents
 
-Place Confident Group PDF files in:
+Place company PDFs in:
 
 ```text
 data/confident_docs/
 ```
 
-Example files:
+The project already expects files such as:
 
 - `confident_group_overview.pdf`
 - `confident_projects.pdf`
@@ -119,70 +115,93 @@ GROQ_API_KEY=your_groq_api_key
 MODEL_NAME=llama-3.3-70b-versatile
 BACKEND_URL=http://127.0.0.1:8000
 
-# Retrieval
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+TOP_K_RESULTS=4
 HYBRID_RETRIEVAL_TOP_K=20
 HYBRID_VECTOR_TOP_K=15
 HYBRID_BM25_TOP_K=15
 RERANKER_TOP_K=5
-ENABLE_QUERY_REWRITE=true
-ENABLE_RERANKER=true
 RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 MAX_CONTEXT_TOKENS=2200
+LLM_TIMEOUT_SECONDS=60
+QUERY_REWRITE_TIMEOUT_SECONDS=20
+ENABLE_QUERY_REWRITE=true
+ENABLE_RERANKER=true
 
-# Chunking
-CHUNK_SIZE=1000
-CHUNK_OVERLAP=200
+# Optional log override
+# LOG_PATH=logs/query_logs.json
+
+# Optional website ingestion
+# WEBSITE_URLS=https://www.confident-group.com,https://example.com/about
 
 # Optional OpenAI-compatible provider
 # LLM_PROVIDER=openai
 # OPENAI_API_KEY=your_openai_api_key
 # OPENAI_API_BASE=https://api.openai.com/v1
 
+# Optional Groq base override
+# GROQ_API_BASE=https://api.groq.com/openai/v1
+
 # Optional Ollama
 # LLM_PROVIDER=ollama
 # OLLAMA_MODEL=llama3.1
 # OLLAMA_BASE_URL=http://localhost:11434
 
-# Optional website ingestion
-# WEBSITE_URLS=https://www.confident-group.com,https://example.com/about
-
-# Optional Hugging Face cache location if disk space is limited
+# Optional Hugging Face cache override
 # HF_HOME=E:\hf_cache
 ```
 
-## Ingest Documents
+Notes:
 
-```bash
+- `.env` entries should not contain spaces around `=`
+- Restart the backend after changing provider or model settings
+- `MODEL_NAME` is used for Groq and OpenAI-compatible chat completions
+- `OLLAMA_MODEL` is used only when `LLM_PROVIDER=ollama`
+
+## Build The Index
+
+Run ingestion after adding or replacing documents:
+
+```powershell
 uv run python scripts/ingest_documents.py
 ```
 
-This will:
+This process:
 
-- load PDF documents from `data/confident_docs`
-- optionally load website content from `WEBSITE_URLS`
-- split the text into chunks
-- add chunk metadata including source and page
-- generate embeddings
-- save the FAISS index to `data/faiss_index`
+- loads PDF files from `data/confident_docs`
+- optionally fetches website content from `WEBSITE_URLS`
+- splits content into chunks
+- normalizes metadata to preserve source and page information
+- assigns a stable `chunk_id` to each chunk
+- creates embeddings
+- writes the FAISS index to `data/faiss_index`
 
-## Run the Backend
+## Run The Backend
 
-```bash
+```powershell
 uv run uvicorn app.main:app --reload
 ```
 
-Backend URLs:
+Available endpoints:
 
-- `http://127.0.0.1:8000`
+- `http://127.0.0.1:8000/health`
+- `http://127.0.0.1:8000/chat`
 - `http://127.0.0.1:8000/docs`
 
-On startup, the app warms up the reranker model so the first user request is faster.
+Startup behavior:
 
-## Run the Streamlit UI
+- the RAG pipeline loads the FAISS index during app lifespan initialization
+- the reranker model is warmed up on startup
+- if reranker warmup fails, the app still starts and falls back gracefully at runtime
+
+## Run The Streamlit UI
 
 In a second terminal:
 
-```bash
+```powershell
 uv run streamlit run ui/chat_ui.py
 ```
 
@@ -190,12 +209,13 @@ UI URL:
 
 - `http://localhost:8501`
 
+The UI sends requests to `BACKEND_URL` and shows cited sources under each assistant response.
+
 ## API Contract
 
 ### Request
 
 ```json
-POST /chat
 {
   "question": "What services does Confident Group provide?"
 }
@@ -215,25 +235,25 @@ POST /chat
 }
 ```
 
-## Example Questions
+## Retrieval And Answer Flow
 
-- What services does Confident Group provide?
-- What residential projects does Confident Group offer?
-- What can you tell me about Confident Group's completed projects?
-- Where are Confident Group projects located?
-- What amenities are available in their properties?
-- Who founded Confident Group?
-- What villa projects are mentioned in the documents?
-- What about their villas?
-- Do they offer premium housing options?
+1. The incoming question is validated by the FastAPI API.
+2. The query rewriter optionally rewrites vague follow-up questions.
+3. The hybrid retriever combines FAISS similarity search and BM25 keyword search.
+4. The reranker optionally sorts the retrieved chunks by relevance.
+5. A context guard trims the final chunk list to fit the configured token budget.
+6. The LLM receives the system prompt plus grounded context and returns an answer.
+7. The API returns the answer and deduplicated source metadata.
 
-## Expected Behavior
+## Helper Script
 
-- Answers are grounded only in the ingested context
-- If the information is missing, the assistant says it is not available
-- Citations are returned separately in the `sources` field
-- Query logs are written without breaking the chatbot if logging fails
-- Re-run ingestion whenever documents are added or replaced
+`run.sh` installs dependencies and runs ingestion:
+
+```bash
+./run.sh
+```
+
+It is mainly useful in Unix-like environments. On Windows, run the `uv` commands directly.
 
 ## Troubleshooting
 
@@ -241,39 +261,47 @@ POST /chat
 
 Run commands from the project root:
 
-```bash
+```powershell
 uv run streamlit run ui/chat_ui.py
-```
-
-### First request is slow
-
-The backend warms up the reranker on startup. If the model still needs to download the first time, keep the server running until startup completes.
-
-### Low disk space during model download
-
-Use a larger Hugging Face cache path:
-
-```env
-HF_HOME=E:\hf_cache
 ```
 
 ### `500 Internal Server Error` from `/chat`
 
 Common causes:
 
-- missing or invalid API key
-- backend not restarted after changing `.env`
-- FAISS index not created yet
+- missing or invalid provider API key
+- unsupported `LLM_PROVIDER`
+- backend not restarted after editing `.env`
+- FAISS index not built yet
+- no PDF files available during ingestion
 
-Fix:
+Typical recovery steps:
 
-```bash
+```powershell
 uv run python scripts/ingest_documents.py
 uv run uvicorn app.main:app --reload
 ```
 
+### First request is slow
+
+The reranker model is warmed up at startup, but the initial model download can still take time the first time the project runs.
+
+### Website ingestion fails
+
+Check that URLs in `WEBSITE_URLS` are reachable and return readable HTML content.
+
+### Low disk space during model download
+
+Set a larger Hugging Face cache path:
+
+```env
+HF_HOME=E:\hf_cache
+```
+
 ## Notes
 
-- Groq uses an OpenAI-compatible chat completions API
-- Ollama remains available as a local fallback
-- The project is structured for local demos, internal reviews, and further production hardening
+- Answers are designed to stay grounded in the ingested context
+- If the answer is missing from the retrieved context, the assistant is instructed to say the information is not available
+- Source citations are returned as structured metadata, not embedded in the answer text
+- Query logging should not break the chatbot if logging fails
+- Re-run ingestion whenever source documents change

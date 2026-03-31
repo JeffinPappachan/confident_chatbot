@@ -17,7 +17,9 @@ _reranker_model: CrossEncoder | None = None
 _reranker_lock = Lock()
 
 
-def _get_reranker_model() -> CrossEncoder:
+def get_reranker_model() -> CrossEncoder:
+    """Return the cached reranker model, loading it on first use."""
+
     global _reranker_model
     if _reranker_model is None:
         with _reranker_lock:
@@ -37,7 +39,7 @@ class Reranker:
             return documents[:RERANKER_TOP_K]
 
         try:
-            model = _get_reranker_model()
+            model = get_reranker_model()
             pairs = [[query, document.page_content] for document in documents]
             scores = model.predict(pairs)
             ranked = sorted(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -9,9 +10,10 @@ from pydantic import BaseModel, Field
 
 from app.config import EMBEDDING_MODEL
 from app.rag_pipeline import RAGPipeline, RAGResponse
-from app.reranker import _get_reranker_model
+from app.reranker import get_reranker_model
 
 
+logger = logging.getLogger(__name__)
 rag_pipeline: RAGPipeline | None = None
 
 
@@ -46,11 +48,11 @@ app = FastAPI(
 @app.on_event("startup")
 def warmup_models() -> None:
     try:
-        print("Starting model warmup...")
-        _get_reranker_model()
-        print("Model warmup completed.")
+        logger.info("Starting model warmup...")
+        get_reranker_model()
+        logger.info("Model warmup completed.")
     except Exception as exc:  # pragma: no cover - startup protection
-        print(f"Warmup failed: {exc}")
+        logger.warning("Warmup failed: %s", exc)
 
 
 @app.get("/health")

@@ -30,7 +30,9 @@ class RAGPipeline:
     SYSTEM_PROMPT = (
         "You are an AI assistant for Confident Group. "
         "Answer the user's question using only the provided context. "
-        "If the answer is not contained in the context, say that the information is not available."
+        "If the answer is not contained in the context, say that the information is not available. "
+        "Do not guess, assume, or fill in missing facts. "
+        "Do not add a separate sources section or inline citation notes in the answer."
     )
 
     def __init__(self, embedding_model: str = EMBEDDING_MODEL) -> None:
@@ -87,6 +89,11 @@ class RAGPipeline:
     def _build_prompt(self, question: str, context: str) -> str:
         return (
             "Use the context below to answer the question about Confident Group.\n\n"
+            "Instructions:\n"
+            "- Answer only from the provided context.\n"
+            "- If the context does not fully answer the question, say the information is not available.\n"
+            "- Do not speculate or make assumptions.\n"
+            "- Do not include source notes, citation labels, or a sources section in the answer.\n\n"
             f"Context:\n{context}\n\n"
             f"Question: {question}\n\n"
             "Answer:"

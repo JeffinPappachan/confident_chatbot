@@ -1,8 +1,24 @@
 # Confident Group RAG Chatbot
 
-A production-ready Retrieval-Augmented Generation (RAG) chatbot for **Confident Group**, built with **FastAPI**, **LangChain**, **FAISS**, **sentence-transformers**, **Groq**, and **Streamlit**.
+A polished Retrieval-Augmented Generation (RAG) chatbot for **Confident Group**, built with **FastAPI**, **LangChain**, **FAISS**, **sentence-transformers**, **Groq/OpenAI/Ollama**, and **Streamlit**.
 
-The application ingests company documents, creates embeddings, stores them in a FAISS vector index, retrieves relevant context for user questions, and sends the retrieved context to a Groq-hosted LLM to generate grounded answers.
+The system ingests company documents, builds a FAISS index, combines semantic and keyword retrieval, reranks results, protects the prompt context window, and returns grounded answers with source citations.
+
+## Architecture
+
+```text
+User
+-> Streamlit UI
+-> FastAPI API
+-> Query Rewriter
+-> Embedding
+-> Hybrid Retrieval (FAISS + BM25)
+-> Reranker
+-> Context Window Guard
+-> Prompt Builder
+-> LLM
+-> Answer + Sources
+```
 
 ## Project Structure
 
@@ -13,12 +29,18 @@ confident-rag-chatbot/
 |  |- config.py
 |  |- document_loader.py
 |  |- embeddings.py
+|  |- hybrid_retriever.py
+|  |- llm_client.py
+|  |- logger.py
 |  |- main.py
+|  |- query_rewriter.py
 |  |- rag_pipeline.py
+|  |- reranker.py
 |  `- vector_store.py
 |- data/
 |  |- confident_docs/
 |  `- faiss_index/
+|- logs/
 |- scripts/
 |  `- ingest_documents.py
 |- ui/
@@ -31,48 +53,48 @@ confident-rag-chatbot/
 
 ## Features
 
-- FastAPI backend with a `POST /chat` endpoint
-- LangChain-based document loading and chunking
-- Sentence-transformer embeddings using `sentence-transformers/all-MiniLM-L6-v2`
-- FAISS vector store for semantic search
-- Groq as the default LLM provider
-- Optional Ollama support for local LLM inference
-- Streamlit chat UI with conversation history
-- PDF ingestion from `data/confident_docs`
-- Optional website ingestion using BeautifulSoup
+- FastAPI backend with `POST /chat` and `GET /health`
+- Streamlit chat UI with preserved chat history
+- Query rewriting for vague follow-up questions
+- Hybrid retrieval using FAISS plus BM25
+- Lightweight reranking with startup warmup and lazy fallback
+- Context window guard to prevent prompt overflow
+- Structured source citations in API/UI responses
+- Query logging to `logs/query_logs.json`
+- PDF ingestion with chunk metadata for source filename and page number
+- Optional website ingestion support
+- Groq, OpenAI-compatible, and Ollama provider support
 
 ## Prerequisites
 
 - Python 3.11 recommended
 - `uv` installed
-- A Groq API key
+- A configured LLM provider
 
-## 1. Create and Use the Virtual Environment
+## Setup
 
-From the project root:
+### 1. Create the virtual environment
 
 ```bash
 uv venv .venv
 ```
 
-Activate it if you want:
-
-### PowerShell
+### 2. Activate it in PowerShell
 
 ```powershell
 cd confident-rag-chatbot
 . .\.venv\Scripts\Activate.ps1
 ```
 
-You can also skip manual activation and run everything through `uv run`.
+You can also skip activation and run everything with `uv run`.
 
-## 2. Install Dependencies
+### 3. Install dependencies
 
 ```bash
 uv pip install -r requirements.txt
 ```
 
-## 3. Add Company Documents
+### 4. Add documents
 
 Place Confident Group PDF files in:
 
@@ -80,14 +102,14 @@ Place Confident Group PDF files in:
 data/confident_docs/
 ```
 
-Example files used in this project:
+Example files:
 
 - `confident_group_overview.pdf`
 - `confident_projects.pdf`
 - `confident_services.pdf`
 - `confident_faq.pdf`
 
-## 4. Configure Environment Variables
+## Environment Variables
 
 Create a `.env` file in the project root.
 
@@ -97,28 +119,38 @@ GROQ_API_KEY=your_groq_api_key
 MODEL_NAME=llama-3.3-70b-versatile
 BACKEND_URL=http://127.0.0.1:8000
 
-# Optional settings
-# CHUNK_SIZE=1000
-# CHUNK_OVERLAP=200
-# TOP_K_RESULTS=4
+# Retrieval
+HYBRID_RETRIEVAL_TOP_K=20
+HYBRID_VECTOR_TOP_K=15
+HYBRID_BM25_TOP_K=15
+RERANKER_TOP_K=5
+ENABLE_QUERY_REWRITE=true
+ENABLE_RERANKER=true
+RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+MAX_CONTEXT_TOKENS=2200
 
-# Optional Ollama fallback
+# Chunking
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+
+# Optional OpenAI-compatible provider
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=your_openai_api_key
+# OPENAI_API_BASE=https://api.openai.com/v1
+
+# Optional Ollama
 # LLM_PROVIDER=ollama
 # OLLAMA_MODEL=llama3.1
 # OLLAMA_BASE_URL=http://localhost:11434
 
 # Optional website ingestion
 # WEBSITE_URLS=https://www.confident-group.com,https://example.com/about
+
+# Optional Hugging Face cache location if disk space is limited
+# HF_HOME=E:\hf_cache
 ```
 
-Important:
-
-- Use `GROQ_API_KEY=...` with no spaces around `=`
-- Restart the backend after changing `.env`
-
-## 5. Build the Vector Database
-
-Run the ingestion pipeline after adding PDFs:
+## Ingest Documents
 
 ```bash
 uv run python scripts/ingest_documents.py
@@ -129,30 +161,26 @@ This will:
 - load PDF documents from `data/confident_docs`
 - optionally load website content from `WEBSITE_URLS`
 - split the text into chunks
+- add chunk metadata including source and page
 - generate embeddings
 - save the FAISS index to `data/faiss_index`
 
-## 6. Run the FastAPI Backend
+## Run the Backend
 
 ```bash
 uv run uvicorn app.main:app --reload
 ```
 
-Backend URL:
+Backend URLs:
 
-```text
-http://127.0.0.1:8000
-```
+- `http://127.0.0.1:8000`
+- `http://127.0.0.1:8000/docs`
 
-Interactive API docs:
+On startup, the app warms up the reranker model so the first user request is faster.
 
-```text
-http://127.0.0.1:8000/docs
-```
+## Run the Streamlit UI
 
-## 7. Run the Streamlit UI
-
-Open a second terminal in the same project directory and run:
+In a second terminal:
 
 ```bash
 uv run streamlit run ui/chat_ui.py
@@ -160,17 +188,9 @@ uv run streamlit run ui/chat_ui.py
 
 UI URL:
 
-```text
-http://localhost:8501
-```
+- `http://localhost:8501`
 
-The chat title is:
-
-```text
-Confident Group AI Assistant
-```
-
-## API Example
+## API Contract
 
 ### Request
 
@@ -185,42 +205,65 @@ POST /chat
 
 ```json
 {
-  "response": "..."
+  "answer": "Confident Group provides ...",
+  "sources": [
+    {
+      "document": "confident_services.pdf",
+      "page": 2
+    }
+  ]
 }
 ```
 
-## Example Questions for Demo
+## Example Questions
 
 - What services does Confident Group provide?
+- What residential projects does Confident Group offer?
+- What can you tell me about Confident Group's completed projects?
 - Where are Confident Group projects located?
-- What amenities are available in their projects?
-- What types of residential projects does Confident Group develop?
+- What amenities are available in their properties?
 - Who founded Confident Group?
-- What types of homes do they offer?
+- What villa projects are mentioned in the documents?
+- What about their villas?
+- Do they offer premium housing options?
 
 ## Expected Behavior
 
-- The assistant answers using retrieved document context
-- If the answer is not present in the ingested documents, it should say it does not know
-- Re-run ingestion whenever you add or update documents
+- Answers are grounded only in the ingested context
+- If the information is missing, the assistant says it is not available
+- Citations are returned separately in the `sources` field
+- Query logs are written without breaking the chatbot if logging fails
+- Re-run ingestion whenever documents are added or replaced
 
 ## Troubleshooting
 
 ### `ModuleNotFoundError: No module named 'app'`
 
-Run Streamlit from the project root:
+Run commands from the project root:
 
 ```bash
 uv run streamlit run ui/chat_ui.py
+```
+
+### First request is slow
+
+The backend warms up the reranker on startup. If the model still needs to download the first time, keep the server running until startup completes.
+
+### Low disk space during model download
+
+Use a larger Hugging Face cache path:
+
+```env
+HF_HOME=E:\hf_cache
 ```
 
 ### `500 Internal Server Error` from `/chat`
 
 Common causes:
 
-- `GROQ_API_KEY` is missing or invalid
-- the backend was not restarted after updating `.env`
-- the FAISS index was not created yet
+- missing or invalid API key
+- backend not restarted after changing `.env`
+- FAISS index not created yet
 
 Fix:
 
@@ -229,14 +272,8 @@ uv run python scripts/ingest_documents.py
 uv run uvicorn app.main:app --reload
 ```
 
-### Backend works but answers are poor
-
-- Verify the PDF files contain the information you are asking about
-- Re-run ingestion after replacing or updating PDFs
-- Ask questions that match the document content closely
-
 ## Notes
 
 - Groq uses an OpenAI-compatible chat completions API
-- Ollama support remains available as an optional local fallback
-- The current setup is designed for local development and demos
+- Ollama remains available as a local fallback
+- The project is structured for local demos, internal reviews, and further production hardening
